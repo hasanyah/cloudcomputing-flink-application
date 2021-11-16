@@ -76,8 +76,8 @@ public class VehicleTelematics {
         });
 
         // emit result
-        if (params.has("output")) {
-            speedRadarData.writeAsText("speedfines.csv", FileSystem.WriteMode.OVERWRITE);
+        if (params.has("outputfolder")) {
+            speedRadarData.writeAsText(params.get("outputfolder")+"speedfines.csv", FileSystem.WriteMode.OVERWRITE);
         }
         else {
             System.out.println("Printing result to stdout. Use --output to specify output path.");
@@ -99,7 +99,7 @@ public class VehicleTelematics {
         }
 
         public CarData(Integer time, Integer vid, Integer spd, Integer xway, Integer lane, Integer dir, Integer seg, Integer pos) {
-            super();
+            super(time, vid, spd, xway, lane, dir, seg, pos);
         }
     }
 
@@ -109,7 +109,7 @@ public class VehicleTelematics {
         }
 
         public SpeedRadarData(Integer time, Integer vid, Integer xway, Integer seg, Integer dir, Integer spd) {
-            super();
+            super(time, vid, xway, seg, dir, spd);
         }
     }
 }
