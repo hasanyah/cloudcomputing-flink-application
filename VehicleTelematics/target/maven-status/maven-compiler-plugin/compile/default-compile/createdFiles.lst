@@ -1,2 +1,8 @@
-es/upm/master/StreamingJob.class
+es/upm/master/VehicleTelematics.class
+es/upm/master/VehicleTelematics$2.class
+es/upm/master/VehicleTelematics$1.class
+es/upm/master/VehicleTelematics$CarData.class
 es/upm/master/BatchJob.class
+es/upm/master/VehicleTelematics$3.class
+es/upm/master/StreamingJob.class
+es/upm/master/VehicleTelematics$SpeedRadarData.class
