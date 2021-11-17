@@ -23,6 +23,7 @@ import java.util.Iterator;
 
 public class VehicleTelematics {
 
+    // TODO: Change the Speed limit to 90 when done
     static final Integer SPEED_LIMIT = 20;
     public static void main(String[] args) {
         
@@ -75,9 +76,32 @@ public class VehicleTelematics {
             }
         });
 
+        int avgSpeed = 60;
+        int segStart = 52;
+        int segEnd = 56;
+
+        SingleOutputStreamOperator<CarData> segmentFilteredCars = inputMap.filter(new FilterFunction<CarData>() {
+            @Override
+            public boolean filter(CarData in) throws Exception {
+                return in.f6 >= segStart && in.f6 <= segEnd; 
+            }
+        });
+        
+        KeyedStream<CarData, Tuple> keyedStream = segmentFilteredCars.keyBy(1);
+        SingleOutputStreamOperator<AverageSpeedData> sumSlidingCounteWindows =
+                keyedStream.countWindow(2,1).apply(new AverageSpeedCalculator());
+
+        SingleOutputStreamOperator<AverageSpeedData> speedAndSegmentFilteredCars = sumSlidingCounteWindows.filter(new FilterFunction<AverageSpeedData>() {
+            @Override
+            public boolean filter(AverageSpeedData in) throws Exception {
+                return in.f5 >= avgSpeed; 
+            }
+        });
+
         // emit result
         if (params.has("outputfolder")) {
-            speedRadarData.writeAsText(params.get("outputfolder")+"speedfines.csv", FileSystem.WriteMode.OVERWRITE);
+            speedRadarData.writeAsCsv(params.get("outputfolder")+"speedfines.csv", FileSystem.WriteMode.OVERWRITE);
+            speedAndSegmentFilteredCars.writeAsCsv(params.get("outputfolder")+"avgspeedfines.csv", FileSystem.WriteMode.OVERWRITE);
         }
         else {
             System.out.println("Printing result to stdout. Use --output to specify output path.");
@@ -89,8 +113,6 @@ public class VehicleTelematics {
         } catch (Exception e) {
             e.printStackTrace();
         }
-
-        KeyedStream<CarData, Tuple> keyedStream = inputMap.keyBy(1);
     }
 
     public static class CarData extends Tuple8<Integer, Integer, Integer, Integer, Integer, Integer, Integer, Integer> {
@@ -110,6 +132,71 @@ public class VehicleTelematics {
 
         public SpeedRadarData(Integer time, Integer vid, Integer xway, Integer seg, Integer dir, Integer spd) {
             super(time, vid, xway, seg, dir, spd);
+        }
+    }
+
+    public static class AverageSpeedData extends Tuple6<Integer, Integer, Integer, Integer, Integer, Integer> {
+        public AverageSpeedData() {
+            super();
+        }
+
+        public AverageSpeedData(Integer time1, Integer time2, Integer vid, Integer xway, Integer dir, Integer avgSpd) {
+            super(time1, time2, vid, xway, dir, avgSpd);
+        }
+    }
+
+    public static class AverageSpeedCalculator implements WindowFunction<CarData, AverageSpeedData, Tuple, GlobalWindow> {
+        public void apply(Tuple tuple, GlobalWindow countWindow, Iterable<CarData> input, Collector<AverageSpeedData> out) throws Exception {
+            Iterator<CarData> iterator = input.iterator();
+            CarData first = iterator.next();
+            int time1 = 0;
+            int time2 = 0;
+            int vid = 0;
+            int xway = 0;
+            int dir = 0;
+            int avgSpd = 0;
+            int seg = 0;
+            int pos = 0;
+            boolean changeInDirection = false;
+            boolean skippedSegment = false;
+            boolean timeInconsistency = false;
+            boolean lonely = true;
+            if(first!=null){
+                time1 = first.f0;
+                vid = first.f1;
+                xway = first.f3;
+                dir = first.f5;
+                avgSpd = first.f2;
+                seg = first.f6;
+                pos = first.f7;
+            }
+            int previousPosition = 0;
+            while(iterator.hasNext()){
+                CarData next = iterator.next();
+                if (next.f5 != dir) {
+                    changeInDirection = true;
+                    break;
+                }
+                if (next.f6 == seg) {
+                    if (next.f7 > previousPosition)
+                        previousPosition = next.f7;
+                    else
+                        continue;
+                }
+                if (next.f6 - seg != 1) {
+                    skippedSegment = true;
+                }
+                if (next.f0 <= time1) {
+                    timeInconsistency = true;
+                }
+
+                time2 = next.f0;
+                avgSpd = (next.f7 - pos) / (time2 - time1);
+                lonely = false;
+            }
+            if (!changeInDirection && !skippedSegment && !timeInconsistency && !lonely) {
+                out.collect(new AverageSpeedData(time1, time2, vid, xway, dir, avgSpd));
+            }
         }
     }
 }
