@@ -6,6 +6,7 @@ import org.apache.flink.api.common.functions.MapFunction;
 import org.apache.flink.api.common.functions.ReduceFunction;
 import org.apache.flink.api.java.tuple.Tuple;
 import org.apache.flink.api.java.tuple.Tuple6;
+import org.apache.flink.api.java.tuple.Tuple7;
 import org.apache.flink.api.java.tuple.Tuple8;
 import org.apache.flink.api.java.utils.ParameterTool;
 import org.apache.flink.core.fs.FileSystem;
@@ -88,10 +89,13 @@ public class VehicleTelematics {
         });
         
         KeyedStream<CarData, Tuple> keyedStream = segmentFilteredCars.keyBy(1);
-        SingleOutputStreamOperator<AverageSpeedData> sumSlidingCounteWindows =
+        SingleOutputStreamOperator<AverageSpeedData> avgSpeedRadarSumSlidingCounteWindows =
                 keyedStream.countWindow(2,1).apply(new AverageSpeedCalculator());
 
-        SingleOutputStreamOperator<AverageSpeedData> speedAndSegmentFilteredCars = sumSlidingCounteWindows.filter(new FilterFunction<AverageSpeedData>() {
+        SingleOutputStreamOperator<AccidentData> accidentReportSumSlidingCounteWindows =
+                keyedStream.countWindow(2,1).apply(new AccidentReporter());
+
+        SingleOutputStreamOperator<AverageSpeedData> speedAndSegmentFilteredCars = avgSpeedRadarSumSlidingCounteWindows.filter(new FilterFunction<AverageSpeedData>() {
             @Override
             public boolean filter(AverageSpeedData in) throws Exception {
                 return in.f5 >= avgSpeed; 
@@ -102,6 +106,7 @@ public class VehicleTelematics {
         if (params.has("outputfolder")) {
             speedRadarData.writeAsCsv(params.get("outputfolder")+"speedfines.csv", FileSystem.WriteMode.OVERWRITE);
             speedAndSegmentFilteredCars.writeAsCsv(params.get("outputfolder")+"avgspeedfines.csv", FileSystem.WriteMode.OVERWRITE);
+            accidentReportSumSlidingCounteWindows.writeAsCsv(params.get("outputfolder")+"accidents.csv", FileSystem.WriteMode.OVERWRITE);
         }
         else {
             System.out.println("Printing result to stdout. Use --output to specify output path.");
@@ -142,6 +147,16 @@ public class VehicleTelematics {
 
         public AverageSpeedData(Integer time1, Integer time2, Integer vid, Integer xway, Integer dir, Integer avgSpd) {
             super(time1, time2, vid, xway, dir, avgSpd);
+        }
+    }
+
+    public static class AccidentData extends Tuple7<Integer, Integer, Integer, Integer, Integer, Integer, Integer> {
+        public AccidentData() {
+            super();
+        }
+
+        public AccidentData(Integer time1, Integer time2, Integer vid, Integer xway, Integer seg, Integer dir, Integer pos) {
+            super(time1, time2, vid, xway, seg, dir, pos);
         }
     }
 
@@ -196,6 +211,51 @@ public class VehicleTelematics {
             }
             if (!changeInDirection && !skippedSegment && !timeInconsistency && !lonely) {
                 out.collect(new AverageSpeedData(time1, time2, vid, xway, dir, avgSpd));
+            }
+        }
+    }
+
+    public static class AccidentReporter implements WindowFunction<CarData, AccidentData, Tuple, GlobalWindow> {
+        public void apply(Tuple tuple, GlobalWindow countWindow, Iterable<CarData> input, Collector<AccidentData> out) throws Exception {
+            Iterator<CarData> iterator = input.iterator();
+            CarData first = iterator.next();
+            int time1 = 0;
+            int time2 = 0;
+            int vid = 0;
+            int xway = 0;
+            int seg = 0;
+            int dir = 0;
+            int pos = 0;
+            int counter = 1;
+
+            if(first!=null){
+                time1 = first.f0;
+                vid = first.f1;
+                xway = first.f3;
+                seg = first.f6;
+                dir = first.f5;
+                pos = first.f7;
+            }
+            out.collect(new AccidentData(time1, 0, vid, xway, seg, dir, 111));
+            while(iterator.hasNext()){
+                CarData next = iterator.next();
+                time2 = next.f0;
+
+                if (next.f7 == pos) {
+                    out.collect(new AccidentData(time1, time2, vid, xway, seg, dir, 999));
+                    counter++;        
+                } else {
+                    counter = 1;
+                    time1 = next.f0;
+                    vid = next.f1;
+                    xway = next.f3;
+                    seg = next.f6;
+                    dir = next.f5;
+                    pos = next.f7;
+                }
+                
+                if (counter >= 4)
+                    out.collect(new AccidentData(time1, time2, vid, xway, seg, dir, pos));
             }
         }
     }
