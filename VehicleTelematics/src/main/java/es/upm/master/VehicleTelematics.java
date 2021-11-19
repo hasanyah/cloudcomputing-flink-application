@@ -89,11 +89,12 @@ public class VehicleTelematics {
         });
         
         KeyedStream<CarData, Tuple> keyedStream = segmentFilteredCars.keyBy(1);
+        KeyedStream<CarData, Tuple> keyedStreamFullData = inputMap.keyBy(1);
         SingleOutputStreamOperator<AverageSpeedData> avgSpeedRadarSumSlidingCounteWindows =
                 keyedStream.countWindow(2,1).apply(new AverageSpeedCalculator());
 
         SingleOutputStreamOperator<AccidentData> accidentReportSumSlidingCounteWindows =
-                keyedStream.countWindow(2,1).apply(new AccidentReporter());
+                keyedStreamFullData.countWindow(4,1).apply(new AccidentReporter());
 
         SingleOutputStreamOperator<AverageSpeedData> speedAndSegmentFilteredCars = avgSpeedRadarSumSlidingCounteWindows.filter(new FilterFunction<AverageSpeedData>() {
             @Override
@@ -236,13 +237,11 @@ public class VehicleTelematics {
                 dir = first.f5;
                 pos = first.f7;
             }
-            out.collect(new AccidentData(time1, 0, vid, xway, seg, dir, 111));
             while(iterator.hasNext()){
                 CarData next = iterator.next();
                 time2 = next.f0;
 
                 if (next.f7 == pos) {
-                    out.collect(new AccidentData(time1, time2, vid, xway, seg, dir, 999));
                     counter++;        
                 } else {
                     counter = 1;
