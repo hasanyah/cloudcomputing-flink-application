@@ -6,17 +6,19 @@ import org.apache.flink.api.common.functions.MapFunction;
 import org.apache.flink.api.common.functions.ReduceFunction;
 import org.apache.flink.api.java.functions.KeySelector;
 import org.apache.flink.api.java.tuple.Tuple;
+import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.api.java.tuple.Tuple3;
 import org.apache.flink.api.java.tuple.Tuple6;
 import org.apache.flink.api.java.tuple.Tuple7;
 import org.apache.flink.api.java.tuple.Tuple8;
 import org.apache.flink.api.java.utils.ParameterTool;
 import org.apache.flink.core.fs.FileSystem;
-import org.apache.flink.streaming.api.TimeCharacteristic;
 import org.apache.flink.streaming.api.datastream.DataStreamSource;
 import org.apache.flink.streaming.api.datastream.KeyedStream;
 import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.streaming.api.functions.timestamps.AscendingTimestampExtractor;
+import org.apache.flink.streaming.api.TimeCharacteristic;
 import org.apache.flink.util.Collector;
 import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.TaskManagerOptions;
@@ -26,8 +28,7 @@ import java.util.Iterator;
 
 public class VehicleTelematics {
 
-    // TODO: Change the Speed limit to 90 when done
-    static final Integer SPEED_LIMIT = 20;
+    static final Integer SPEED_LIMIT = 90;
     public static void main(String[] args) {
         
         final ParameterTool params = ParameterTool.fromArgs(args);
@@ -63,7 +64,6 @@ public class VehicleTelematics {
         });
 
         // Dealing with the speed radar: cars with speed >= 90
-        // store the Time[0], VID[1], XWay[3], Seg[6], Dir[5], Spd[2]
         SingleOutputStreamOperator<CarData> speedFilteredCars = inputMap.filter(new FilterFunction<CarData>() {
             @Override
             public boolean filter(CarData in) throws Exception {
@@ -71,13 +71,24 @@ public class VehicleTelematics {
             }
         });
 
-        // Remove the unnecessary columns
+
+        //////////////////////////////////////////////////////////////////
+        //////////////////////////////////////////////////////////////////
+        // The first report
         SingleOutputStreamOperator<SpeedRadarData> speedRadarData = 
         speedFilteredCars.map(new MapFunction<CarData, SpeedRadarData>() {
             public SpeedRadarData map(CarData in) throws Exception{
-                return new SpeedRadarData(in.f0, in.f1, in.f3, in.f6, in.f5, in.f2);
+                return new SpeedRadarData(in.f0*1000, in.f1, in.f3, in.f6, in.f5, in.f2);
             }
         });
+
+        //////////////////////////////////////////////////////////////////
+        //////////////////////////////////////////////////////////////////
+
+
+        //////////////////////////////////////////////////////////////////
+        //////////////////////////////////////////////////////////////////
+        // 2nd report
 
         int segStart = 52;
         int segEnd = 56;
@@ -112,13 +123,22 @@ public class VehicleTelematics {
                 }
         );
         
-        KeyedStream<CarData, Tuple> keyedStream = carsReducedForAvgSpeedCalc.keyBy(1);
-        SingleOutputStreamOperator<AverageSpeedData> avgSpeedRadarSumSlidingCounteWindows =
-                keyedStream.countWindow(2,1).apply(new AverageSpeedCalculator());
+        KeyedStream<CarData, Tuple> customKeyedCars = carsReducedForAvgSpeedCalc.assignTimestampsAndWatermarks(
+            new AscendingTimestampExtractor<CarData>() {
+                @Override
+                public long extractAscendingTimestamp(CarData input) {
+                    return input.f0*1000;
+                }
+            }
+        ).keyBy(new KeySelector<CarData, SegmentDirCarKeyStructure>() {
+            @Override
+            public SegmentDirCarKeyStructure getKey(CarData value) throws Exception {
+                return new SegmentDirCarKeyStructure(value.f1, value.f6, value.f5);
+            }
+        });
 
-        KeyedStream<CarData, Tuple> keyedStreamFullData = inputMap.keyBy(1);
-        SingleOutputStreamOperator<AccidentData> accidentReportSumSlidingCounteWindows =
-                keyedStreamFullData.countWindow(4,1).apply(new AccidentReporter());
+        SingleOutputStreamOperator<AverageSpeedData> avgSpeedRadarSumSlidingCounteWindows =
+                customKeyedCars.countWindow(2,1).apply(new AverageSpeedCalculator());
 
         int avgSpeed = 60;
         SingleOutputStreamOperator<AverageSpeedData> speedAndSegmentFilteredCars = avgSpeedRadarSumSlidingCounteWindows.filter(new FilterFunction<AverageSpeedData>() {
@@ -127,6 +147,36 @@ public class VehicleTelematics {
                 return in.f5 >= avgSpeed; 
             }
         });
+
+        //////////////////////////////////////////////////////////////////
+        //////////////////////////////////////////////////////////////////
+
+
+
+
+        //////////////////////////////////////////////////////////////////
+        //////////////////////////////////////////////////////////////////
+        // 3rd report
+
+        KeyedStream<CarData, Tuple> keyedStreamFullData = inputMap.assignTimestampsAndWatermarks(
+            new AscendingTimestampExtractor<CarData>() {
+                @Override
+                public long extractAscendingTimestamp(CarData input) {
+                    return input.f0*1000;
+                }
+            }
+        ).keyBy(new KeySelector<CarData, DirCarKeyStructure>() {
+            @Override
+            public DirCarKeyStructure getKey(CarData value) throws Exception {
+                return new DirCarKeyStructure(value.f1, value.f5);
+            }
+        });
+
+        SingleOutputStreamOperator<AccidentData> accidentReportSumSlidingCounteWindows =
+                keyedStreamFullData.countWindow(4,1).apply(new AccidentReporter());
+
+        //////////////////////////////////////////////////////////////////
+        //////////////////////////////////////////////////////////////////
 
         // emit result
         if (params.has("outputfolder")) {
@@ -193,6 +243,16 @@ public class VehicleTelematics {
 
         public SegmentDirCarKeyStructure(Integer vid, Integer seg, Integer dir) {
             super(vid, seg, dir);
+        }
+    }
+
+    public static class DirCarKeyStructure extends Tuple2<Integer, Integer> {
+        public DirCarKeyStructure() {
+            super();
+        }
+
+        public DirCarKeyStructure(Integer vid, Integer dir) {
+            super(vid, dir);
         }
     }
 
