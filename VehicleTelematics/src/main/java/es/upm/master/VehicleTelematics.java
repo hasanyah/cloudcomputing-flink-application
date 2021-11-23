@@ -33,19 +33,7 @@ public class VehicleTelematics {
         
         final ParameterTool params = ParameterTool.fromArgs(args);
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
-        
-        // Find a solution to increase the size of the task manager
-        /*
-        
-        final int parallelism = 1;
-        final Configuration configuration = new Configuration();
-        configuration.setInteger(TaskManagerOptions.NUM_TASK_SLOTS, 2);
-
-        final StreamExecutionEnvironment env = StreamExecutionEnvironment.createLocalEnvironment(parallelism, configuration);
-        */
-        
         DataStreamSource<String> inputStream = env.readTextFile(params.get("input"));
-
         env.getConfig().setGlobalJobParameters(params);
         env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime);
 
