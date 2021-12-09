@@ -24,6 +24,10 @@ import org.apache.flink.configuration.Configuration;
 import org.apache.flink.configuration.TaskManagerOptions;
 import org.apache.flink.streaming.api.functions.windowing.WindowFunction;
 import org.apache.flink.streaming.api.windowing.windows.GlobalWindow;
+import org.apache.flink.streaming.api.windowing.time.Time;
+import org.apache.flink.streaming.api.windowing.windows.TimeWindow;
+import org.apache.flink.streaming.api.windowing.assigners.EventTimeSessionWindows;
+import org.apache.flink.streaming.api.windowing.assigners.SlidingEventTimeWindows;
 import java.util.Iterator;
 
 public class VehicleTelematics {
@@ -63,10 +67,18 @@ public class VehicleTelematics {
         //////////////////////////////////////////////////////////////////
         //////////////////////////////////////////////////////////////////
         // The first report
+
         SingleOutputStreamOperator<SpeedRadarData> speedRadarData = 
-        speedFilteredCars.map(new MapFunction<CarData, SpeedRadarData>() {
+        speedFilteredCars.assignTimestampsAndWatermarks(
+            new AscendingTimestampExtractor<CarData>() {
+                @Override
+                public long extractAscendingTimestamp(CarData input) {
+                    return input.f0*1000;
+                }
+            }
+        ).map(new MapFunction<CarData, SpeedRadarData>() {
             public SpeedRadarData map(CarData in) throws Exception{
-                return new SpeedRadarData(in.f0*1000, in.f1, in.f3, in.f6, in.f5, in.f2);
+                return new SpeedRadarData(in.f0, in.f1, in.f3, in.f6, in.f5, in.f2);
             }
         });
 
@@ -84,23 +96,39 @@ public class VehicleTelematics {
         SingleOutputStreamOperator<CarData> segmentFilteredCars = inputMap.filter(new FilterFunction<CarData>() {
             @Override
             public boolean filter(CarData in) throws Exception {
-                return in.f6 >= segStart && in.f6 <= segEnd; 
+                return in.f6 == segStart || in.f6 == segEnd; 
             }
         });
         
-        KeyedStream<CarData, Tuple> carsKeyedByIdDirSeg = 
-            segmentFilteredCars.keyBy(1);
+        KeyedStream<CarData, DirCarKeySegStructure> carsKeyedByIdDirSeg = 
+            segmentFilteredCars.keyBy(
+                new KeySelector<CarData, DirCarKeySegStructure>() {
+
+                @Override
+                public DirCarKeySegStructure getKey(CarData value) throws Exception {
+                    return new DirCarKeySegStructure(value.f1, value.f5, value.f6);
+                }
+            }
+        );
         
         SingleOutputStreamOperator<CarData> carsReducedForAvgSpeedCalc = carsKeyedByIdDirSeg.reduce(
-                new ReduceFunction<CarData>() {
-                    public CarData reduce(CarData value1, CarData value2) throws Exception {
+            new ReduceFunction<CarData>() {
+                public CarData reduce(CarData value1, CarData value2) throws Exception {
+                    if (value1.f5 == 0) {
                         if (value2.f7 > value1.f7) {
-                            return new CarData(value2.f0, value2.f1, value2.f2, value2.f3, value2.f4, value2.f5, value2.f6, value2.f7);
+                            return value2;
                         } else { 
-                            return new CarData(value1.f0, value1.f1, value1.f2, value1.f3, value1.f4, value1.f5, value1.f6, value1.f7);
+                            return value1;
+                        }
+                    } else {
+                        if (value2.f7 > value1.f7) {
+                            return value1;
+                        } else { 
+                            return value2;
                         }
                     }
                 }
+            }
         );
         
         KeyedStream<CarData, Tuple> customKeyedCars = carsReducedForAvgSpeedCalc.assignTimestampsAndWatermarks(
@@ -114,14 +142,6 @@ public class VehicleTelematics {
 
         SingleOutputStreamOperator<AverageSpeedData> avgSpeedRadarSumSlidingCounteWindows =
                 customKeyedCars.countWindow(2,1).apply(new AverageSpeedCalculator());
-
-        int avgSpeed = 60;
-        SingleOutputStreamOperator<AverageSpeedData> speedAndSegmentFilteredCars = avgSpeedRadarSumSlidingCounteWindows.filter(new FilterFunction<AverageSpeedData>() {
-            @Override
-            public boolean filter(AverageSpeedData in) throws Exception {
-                return in.f5 >= avgSpeed; 
-            }
-        });
 
         //////////////////////////////////////////////////////////////////
         //////////////////////////////////////////////////////////////////
@@ -151,7 +171,7 @@ public class VehicleTelematics {
         // emit result
         if (params.has("outputfolder")) {
             speedRadarData.writeAsCsv(params.get("outputfolder")+"speedfines.csv", FileSystem.WriteMode.OVERWRITE).setParallelism(1);
-            speedAndSegmentFilteredCars.writeAsCsv(params.get("outputfolder")+"avgspeedfines.csv", FileSystem.WriteMode.OVERWRITE).setParallelism(1);
+            avgSpeedRadarSumSlidingCounteWindows.writeAsCsv(params.get("outputfolder")+"avgspeedfines.csv", FileSystem.WriteMode.OVERWRITE).setParallelism(1);
             accidentReportSumSlidingCounteWindows.writeAsCsv(params.get("outputfolder")+"accidents.csv", FileSystem.WriteMode.OVERWRITE).setParallelism(1);
         }
         else {
@@ -206,13 +226,13 @@ public class VehicleTelematics {
         }
     }
 
-    public static class SegmentDirCarKeyStructure extends Tuple3<Integer, Integer, Integer> {
-        public SegmentDirCarKeyStructure() {
+    public static class DirCarKeySegStructure extends Tuple3<Integer, Integer, Integer> {
+        public DirCarKeySegStructure() {
             super();
         }
 
-        public SegmentDirCarKeyStructure(Integer vid, Integer seg, Integer dir) {
-            super(vid, seg, dir);
+        public DirCarKeySegStructure(Integer vid, Integer dir, Integer seg) {
+            super(vid, dir, seg);
         }
     }
 
@@ -226,8 +246,8 @@ public class VehicleTelematics {
         }
     }
 
-    public static class AverageSpeedCalculator implements WindowFunction<CarData, AverageSpeedData, Tuple, GlobalWindow> {
-        public void apply(Tuple key, GlobalWindow countWindow, Iterable<CarData> input, Collector<AverageSpeedData> out) throws Exception {
+    public static class AverageSpeedCalculator implements WindowFunction<CarData, AverageSpeedData, DirCarKeyStructure, GlobalWindow> {
+        public void apply(DirCarKeyStructure key, GlobalWindow timeWindow, Iterable<CarData> input, Collector<AverageSpeedData> out) throws Exception {
             Iterator<CarData> iterator = input.iterator();
             CarData first = iterator.next();
             int time1 = 0;
@@ -238,9 +258,6 @@ public class VehicleTelematics {
             int speed = 0;
             int seg = 0;
             int pos = 0;
-            boolean skippedSegment = false;
-            boolean timeInconsistency = false;
-            boolean lonely = true;
             if(first!=null){
                 time1 = first.f0;
                 vid = first.f1;
@@ -250,43 +267,16 @@ public class VehicleTelematics {
                 seg = first.f6;
                 pos = first.f7;
             }
-            int previousPosition = 0;
+        
+            CarData next = first;
             while(iterator.hasNext()){
-                CarData next = iterator.next();
-                int nextPos = next.f7;
-                int nextSeg = next.f6;
-                int nextVid = next.f1;
-                time2 = next.f0;
-
-                if (nextSeg == seg) {
-                    if (nextPos > previousPosition)
-                        previousPosition = nextPos;
-                    else
-                        continue;
-                }
-                if (time2 == time1 && vid == nextVid) {
-                    if (nextPos > previousPosition) {
-                        previousPosition = nextPos;
-                        continue;
-                    } else {
-                        out.collect(new AverageSpeedData(time1, time2, vid, xway, dir, speed));
-                        continue;
-                    }
-                }
-                if (nextSeg - seg != 1) {
-                    skippedSegment = true;
-                }
-                if (next.f0 <= time1) {
-                    timeInconsistency = true;
-                }
-
-                
-                // average speed
-                speed = (nextPos - pos) / (time2 - time1);
-                lonely = false;
+                next = iterator.next();
             }
-            if (!skippedSegment && !timeInconsistency && !lonely) {
-                out.collect(new AverageSpeedData(time1, time2, vid, xway, dir, speed));
+            if (first.f6 == 52 && next.f6 == 56) {
+                time2 = next.f0;
+                speed = (int)(((next.f7 - first.f7) / (time2 - time1)) * 60 * 60 / 1000 * 0.621371);
+                if (speed > 60)
+                    out.collect(new AverageSpeedData(time1, time2, vid, xway, dir, speed));
             }
         }
     }
