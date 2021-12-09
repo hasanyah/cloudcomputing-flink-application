@@ -28,14 +28,14 @@ import java.util.Iterator;
 
 public class VehicleTelematics {
 
-    static final Integer SPEED_LIMIT = 20;
+    static final Integer SPEED_LIMIT = 90;
     public static void main(String[] args) {
         
         final ParameterTool params = ParameterTool.fromArgs(args);
         StreamExecutionEnvironment env = StreamExecutionEnvironment.getExecutionEnvironment();
-        DataStreamSource<String> inputStream = env.readTextFile(params.get("input"));
         env.getConfig().setGlobalJobParameters(params);
         env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime);
+        DataStreamSource<String> inputStream = env.readTextFile(params.get("input"));
 
         SingleOutputStreamOperator<CarData> inputMap = inputStream.flatMap(new FlatMapFunction<String, CarData>() {
             public void flatMap(String input, Collector<CarData> collector) throws Exception {
@@ -88,16 +88,8 @@ public class VehicleTelematics {
             }
         });
         
-        KeyedStream<CarData, SegmentDirCarKeyStructure> carsKeyedByIdDirSeg = 
-            segmentFilteredCars.keyBy(
-                new KeySelector<CarData, SegmentDirCarKeyStructure>() {
-
-                @Override
-                public SegmentDirCarKeyStructure getKey(CarData value) throws Exception {
-                    return new SegmentDirCarKeyStructure(value.f1, value.f6, value.f5);
-                }
-            }
-        );
+        KeyedStream<CarData, Tuple> carsKeyedByIdDirSeg = 
+            segmentFilteredCars.keyBy(1);
         
         SingleOutputStreamOperator<CarData> carsReducedForAvgSpeedCalc = carsKeyedByIdDirSeg.reduce(
                 new ReduceFunction<CarData>() {
@@ -111,24 +103,19 @@ public class VehicleTelematics {
                 }
         );
         
-        KeyedStream<CarData, DirCarKeyStructure> customKeyedCars = carsReducedForAvgSpeedCalc.assignTimestampsAndWatermarks(
+        KeyedStream<CarData, Tuple> customKeyedCars = carsReducedForAvgSpeedCalc.assignTimestampsAndWatermarks(
             new AscendingTimestampExtractor<CarData>() {
                 @Override
                 public long extractAscendingTimestamp(CarData input) {
                     return input.f0*1000;
                 }
             }
-        ).keyBy(new KeySelector<CarData, DirCarKeyStructure>() {
-            @Override
-            public DirCarKeyStructure getKey(CarData value) throws Exception {
-                return new DirCarKeyStructure(value.f1, value.f5);
-            }
-        });
+        ).keyBy(1);
 
         SingleOutputStreamOperator<AverageSpeedData> avgSpeedRadarSumSlidingCounteWindows =
                 customKeyedCars.countWindow(2,1).apply(new AverageSpeedCalculator());
 
-        int avgSpeed = 15;
+        int avgSpeed = 60;
         SingleOutputStreamOperator<AverageSpeedData> speedAndSegmentFilteredCars = avgSpeedRadarSumSlidingCounteWindows.filter(new FilterFunction<AverageSpeedData>() {
             @Override
             public boolean filter(AverageSpeedData in) throws Exception {
@@ -146,19 +133,14 @@ public class VehicleTelematics {
         //////////////////////////////////////////////////////////////////
         // 3rd report
 
-        KeyedStream<CarData, DirCarKeyStructure> keyedStreamFullData = inputMap.assignTimestampsAndWatermarks(
+        KeyedStream<CarData, Tuple> keyedStreamFullData = inputMap.assignTimestampsAndWatermarks(
             new AscendingTimestampExtractor<CarData>() {
                 @Override
                 public long extractAscendingTimestamp(CarData input) {
                     return input.f0*1000;
                 }
             }
-        ).keyBy(new KeySelector<CarData, DirCarKeyStructure>() {
-            @Override
-            public DirCarKeyStructure getKey(CarData value) throws Exception {
-                return new DirCarKeyStructure(value.f1, value.f5);
-            }
-        });
+        ).keyBy(1);
 
         SingleOutputStreamOperator<AccidentData> accidentReportSumSlidingCounteWindows =
                 keyedStreamFullData.countWindow(4,1).apply(new AccidentReporter());
@@ -168,9 +150,9 @@ public class VehicleTelematics {
 
         // emit result
         if (params.has("outputfolder")) {
-            speedRadarData.writeAsCsv(params.get("outputfolder")+"speedfines.csv", FileSystem.WriteMode.OVERWRITE);
-            speedAndSegmentFilteredCars.writeAsCsv(params.get("outputfolder")+"avgspeedfines.csv", FileSystem.WriteMode.OVERWRITE);
-            accidentReportSumSlidingCounteWindows.writeAsCsv(params.get("outputfolder")+"accidents.csv", FileSystem.WriteMode.OVERWRITE);
+            speedRadarData.writeAsCsv(params.get("outputfolder")+"speedfines.csv", FileSystem.WriteMode.OVERWRITE).setParallelism(1);
+            speedAndSegmentFilteredCars.writeAsCsv(params.get("outputfolder")+"avgspeedfines.csv", FileSystem.WriteMode.OVERWRITE).setParallelism(1);
+            accidentReportSumSlidingCounteWindows.writeAsCsv(params.get("outputfolder")+"accidents.csv", FileSystem.WriteMode.OVERWRITE).setParallelism(1);
         }
         else {
             System.out.println("Printing result to stdout. Use --output to specify output path.");
@@ -244,8 +226,8 @@ public class VehicleTelematics {
         }
     }
 
-    public static class AverageSpeedCalculator implements WindowFunction<CarData, AverageSpeedData, DirCarKeyStructure, GlobalWindow> {
-        public void apply(DirCarKeyStructure key, GlobalWindow countWindow, Iterable<CarData> input, Collector<AverageSpeedData> out) throws Exception {
+    public static class AverageSpeedCalculator implements WindowFunction<CarData, AverageSpeedData, Tuple, GlobalWindow> {
+        public void apply(Tuple key, GlobalWindow countWindow, Iterable<CarData> input, Collector<AverageSpeedData> out) throws Exception {
             Iterator<CarData> iterator = input.iterator();
             CarData first = iterator.next();
             int time1 = 0;
@@ -273,12 +255,23 @@ public class VehicleTelematics {
                 CarData next = iterator.next();
                 int nextPos = next.f7;
                 int nextSeg = next.f6;
+                int nextVid = next.f1;
+                time2 = next.f0;
 
                 if (nextSeg == seg) {
                     if (nextPos > previousPosition)
                         previousPosition = nextPos;
                     else
                         continue;
+                }
+                if (time2 == time1 && vid == nextVid) {
+                    if (nextPos > previousPosition) {
+                        previousPosition = nextPos;
+                        continue;
+                    } else {
+                        out.collect(new AverageSpeedData(time1, time2, vid, xway, dir, speed));
+                        continue;
+                    }
                 }
                 if (nextSeg - seg != 1) {
                     skippedSegment = true;
@@ -287,7 +280,7 @@ public class VehicleTelematics {
                     timeInconsistency = true;
                 }
 
-                time2 = next.f0;
+                
                 // average speed
                 speed = (nextPos - pos) / (time2 - time1);
                 lonely = false;
@@ -298,8 +291,8 @@ public class VehicleTelematics {
         }
     }
 
-    public static class AccidentReporter implements WindowFunction<CarData, AccidentData, DirCarKeyStructure, GlobalWindow> {
-        public void apply(DirCarKeyStructure key, GlobalWindow countWindow, Iterable<CarData> input, Collector<AccidentData> out) throws Exception {
+    public static class AccidentReporter implements WindowFunction<CarData, AccidentData, Tuple, GlobalWindow> {
+        public void apply(Tuple key, GlobalWindow countWindow, Iterable<CarData> input, Collector<AccidentData> out) throws Exception {
             Iterator<CarData> iterator = input.iterator();
             CarData first = iterator.next();
             int time1 = 0;
