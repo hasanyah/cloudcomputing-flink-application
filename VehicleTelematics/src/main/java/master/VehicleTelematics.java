@@ -1,4 +1,4 @@
-package es.upm.master;
+package master;
 
 import org.apache.flink.api.common.functions.FilterFunction;
 import org.apache.flink.api.common.functions.FlatMapFunction;
@@ -131,22 +131,28 @@ public class VehicleTelematics {
             }
         );
         
-        KeyedStream<CarData, Tuple> customKeyedCars = carsReducedForAvgSpeedCalc.assignTimestampsAndWatermarks(
+        KeyedStream<CarData, DirCarKeyStructure> customKeyedCars = carsReducedForAvgSpeedCalc.assignTimestampsAndWatermarks(
             new AscendingTimestampExtractor<CarData>() {
                 @Override
                 public long extractAscendingTimestamp(CarData input) {
                     return input.f0*1000;
                 }
             }
-        ).keyBy(1);
+        ).keyBy(
+                new KeySelector<CarData, DirCarKeyStructure>() {
+
+                @Override
+                public DirCarKeyStructure getKey(CarData value) throws Exception {
+                    return new DirCarKeyStructure(value.f1, value.f5);
+                }
+            }
+        );
 
         SingleOutputStreamOperator<AverageSpeedData> avgSpeedRadarSumSlidingCounteWindows =
                 customKeyedCars.countWindow(2,1).apply(new AverageSpeedCalculator());
 
         //////////////////////////////////////////////////////////////////
         //////////////////////////////////////////////////////////////////
-
-
 
 
         //////////////////////////////////////////////////////////////////
