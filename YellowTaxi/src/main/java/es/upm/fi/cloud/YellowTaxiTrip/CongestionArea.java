@@ -58,7 +58,7 @@ public class CongestionArea {
 			public long extractAscendingTimestamp(Tuple3<Long, Integer, Double> element) {
 				return element.f0;
 			}
-		}).windowAll(TumblingEventTimeWindows.of(Time.hours(1))
+		}).windowAll(TumblingEventTimeWindows.of(Time.days(1))
 		).aggregate(new ProcessWindow());
 
 		// Test output to see if we got the input correctly so far
@@ -122,7 +122,7 @@ public class CongestionArea {
 	private static class ProcessWindow implements AggregateFunction<
 		Tuple3<Long, Integer, Double>, 
 		Tuple3<Long, Integer, Double>, 
-		Tuple2<Integer, Double>> {
+		Tuple3<Long, Integer, Double>> {
 			@Override
 			public Tuple3<Long, Integer, Double> createAccumulator() {
 				return new Tuple3<Long, Integer, Double>(0L, 0, 0.0);
@@ -134,8 +134,8 @@ public class CongestionArea {
 					return new Tuple3<Long, Integer, Double>(value.f0, value.f1+acc.f1, acc.f2+value.f2);
 			}
 			@Override
-			public Tuple2<Integer, Double> getResult(Tuple3<Long, Integer, Double> acc) {
-				return new Tuple2<>(acc.f1, acc.f2);
+			public Tuple3<Long, Integer, Double> getResult(Tuple3<Long, Integer, Double> acc) {
+				return new Tuple3<>(acc.f0, acc.f1, acc.f2);
 			}
 			// @Override
 			// public Tuple2<Integer, Double> getResult(Tuple3<Long, Integer, Double> acc) {
