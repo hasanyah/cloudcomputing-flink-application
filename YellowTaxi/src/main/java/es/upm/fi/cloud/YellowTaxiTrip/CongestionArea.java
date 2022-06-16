@@ -1,9 +1,15 @@
 package es.upm.fi.cloud.YellowTaxiTrip;
 
 import java.util.Date;
-import java.text.*;
+import java.util.TimeZone;
+import java.text.DateFormat;
+import java.text.SimpleDateFormat;
 import java.sql.Timestamp;
+import java.text.*;
+import java.math.BigDecimal;
+import java.math.RoundingMode;
 import org.apache.commons.lang3.math.NumberUtils;
+import org.apache.commons.lang3.time.DateUtils;
 import org.apache.flink.api.common.functions.AggregateFunction;
 import org.apache.flink.api.common.functions.FilterFunction;
 import org.apache.flink.api.common.functions.FlatMapFunction;
@@ -31,7 +37,7 @@ public class CongestionArea {
 		env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime);
 		DataStreamSource<String> inputStream = env.readTextFile(params.get("input"));
 
-		SingleOutputStreamOperator<Tuple3<Long, Integer, Double>> inputMap = inputStream.map(new MapFunction<String, Tuple4<Long, Integer, Double, Double>>() {
+		SingleOutputStreamOperator<Tuple3<String, Integer, Double>> dailyAverages = inputStream.map(new MapFunction<String, Tuple4<Long, Integer, Double, Double>>() {
 			public Tuple4<Long, Integer, Double, Double> map(String s) throws Exception {
 				String[] data = s.split(",");
 				return new Tuple4(
@@ -61,51 +67,12 @@ public class CongestionArea {
 		}).windowAll(TumblingEventTimeWindows.of(Time.days(1))
 		).aggregate(new ProcessWindow());
 
-		// Test output to see if we got the input correctly so far
-		// SingleOutputStreamOperator<TaxiData> allData = inputMap.filter(new FilterFunction<TaxiData>() {
-        //     @Override
-        //     public boolean filter(TaxiData in) throws Exception {
-        //         return true; 
-        //     }
-        // });
-
-		// // Format the pu and do time/dates to keep only the dates, 1 (so that we sum it in the following step), totalAmount
-		// SingleOutputStreamOperator<Tuple3<String, Integer, Double>> congestedData = allData.filter(new FilterFunction<TaxiData>() {
-        //     @Override
-        //     public boolean filter(TaxiData in) throws Exception {
-        //         return in.f17 > 0.0d; 
-        //     }
-        // }).
-		// map(new MapFunction<TaxiData, Tuple3<String, Integer, Double>>() {
-        //     public Tuple3<String, Integer, Double> map(TaxiData in) throws Exception{
-        //         return new Tuple3<String, Integer, Double>(
-		// 			in.f1.split(" ")[0].replace('-', '/'),
-		// 			1,
-		// 			in.f16
-		// 		);
-        //     }
-        // });
-
-		// // Reduce trips to get the following format: DATE,NUMBER_OF_TRIPS,TOTAL_AMOUNT
-
-		// SingleOutputStreamOperator<Tuple3<String, Integer, Double>> totalsByDate = 
-		// congestedData
-		// 	.keyBy(0)
-
-		// 	.reduce(
-		// 		new ReduceFunction<Tuple3<String, Integer, Double>>() {
-		// 			public Tuple3<String, Integer, Double> reduce(Tuple3<String, Integer, Double> t1, Tuple3<String, Integer, Double> t2) throws Exception {
-		// 				return new Tuple3<String, Integer, Double>(t1.f0, t1.f1+t2.f1, t1.f2+t2.f2);
-		// 			}
-		// 		}
-    	// 	);
-
 		if (params.has("output")) {
-            inputMap.writeAsCsv(params.get("output"), FileSystem.WriteMode.OVERWRITE);
+            dailyAverages.writeAsCsv(params.get("output"), FileSystem.WriteMode.OVERWRITE);
         }
         else {
             System.out.println("Printing result to stdout. Use --output to specify output path.");
-            inputMap.print();
+            dailyAverages.print();
         }
 
         try {
@@ -116,13 +83,23 @@ public class CongestionArea {
 	}
 
 	private static long dateToTimestamp(String sDate) throws ParseException {
-		return Timestamp.valueOf(sDate).getTime();
+		SimpleDateFormat formatter = new SimpleDateFormat("yyyy-MM-dd hh:mm:ss");
+		TimeZone.setDefault(TimeZone.getTimeZone("UTC"));
+		return formatter.parse(sDate).getTime();
+	}
+
+	private static double round(double value, int places) {
+		if (places < 0) throw new IllegalArgumentException();
+
+		BigDecimal bd = new BigDecimal(Double.toString(value));
+		bd = bd.setScale(places, RoundingMode.HALF_UP);
+		return bd.doubleValue();
 	}
 
 	private static class ProcessWindow implements AggregateFunction<
 		Tuple3<Long, Integer, Double>, 
 		Tuple3<Long, Integer, Double>, 
-		Tuple3<Long, Integer, Double>> {
+		Tuple3<String, Integer, Double>> {
 			@Override
 			public Tuple3<Long, Integer, Double> createAccumulator() {
 				return new Tuple3<Long, Integer, Double>(0L, 0, 0.0);
@@ -134,13 +111,10 @@ public class CongestionArea {
 					return new Tuple3<Long, Integer, Double>(value.f0, value.f1+acc.f1, acc.f2+value.f2);
 			}
 			@Override
-			public Tuple3<Long, Integer, Double> getResult(Tuple3<Long, Integer, Double> acc) {
-				return new Tuple3<>(acc.f0, acc.f1, acc.f2);
+			public Tuple3<String, Integer, Double> getResult(Tuple3<Long, Integer, Double> acc) {
+				DateFormat df = new SimpleDateFormat("yyyy/MM/dd");
+				return new Tuple3<>(df.format(acc.f0), acc.f1, round(acc.f2/acc.f1, 2));
 			}
-			// @Override
-			// public Tuple2<Integer, Double> getResult(Tuple3<Long, Integer, Double> acc) {
-			// 		return acc.f1 / acc.f0;
-			// }
 			@Override
 			public Tuple3<Long, Integer, Double> merge(
 				Tuple3<Long, Integer, Double> acc, 
