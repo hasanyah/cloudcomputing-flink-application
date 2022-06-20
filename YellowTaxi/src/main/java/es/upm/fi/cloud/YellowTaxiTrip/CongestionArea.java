@@ -83,7 +83,7 @@ public class CongestionArea {
 	}
 
 	private static long dateToTimestamp(String sDate) throws ParseException {
-		SimpleDateFormat formatter = new SimpleDateFormat("yyyy-MM-dd hh:mm:ss");
+		SimpleDateFormat formatter = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
 		TimeZone.setDefault(TimeZone.getTimeZone("UTC"));
 		return formatter.parse(sDate).getTime();
 	}
