@@ -29,6 +29,10 @@ import org.apache.flink.streaming.api.TimeCharacteristic;
 import org.apache.flink.streaming.api.windowing.time.Time;
 import org.apache.flink.util.Collector;
 import org.apache.flink.streaming.api.windowing.assigners.TumblingEventTimeWindows;
+import org.apache.flink.streaming.api.functions.windowing.WindowFunction;
+import org.apache.flink.streaming.api.functions.windowing.AllWindowFunction;
+import org.apache.flink.streaming.api.windowing.windows.TimeWindow;
+
 
 public class CongestionArea {
 	public static void main(String[] args) {
@@ -65,7 +69,7 @@ public class CongestionArea {
 				return element.f0;
 			}
 		}).windowAll(TumblingEventTimeWindows.of(Time.days(1))
-		).aggregate(new ProcessWindow());
+		).apply(new CongestionAreaFunction());
 
 		if (params.has("output")) {
             dailyAverages.writeAsCsv(params.get("output"), FileSystem.WriteMode.OVERWRITE);
@@ -84,7 +88,7 @@ public class CongestionArea {
 
 	private static long dateToTimestamp(String sDate) throws ParseException {
 		SimpleDateFormat formatter = new SimpleDateFormat("yyyy-MM-dd HH:mm:ss");
-		TimeZone.setDefault(TimeZone.getTimeZone("UTC"));
+		TimeZone.setDefault(TimeZone.getTimeZone("GMT+2"));
 		return formatter.parse(sDate).getTime();
 	}
 
@@ -122,4 +126,30 @@ public class CongestionArea {
 					return new Tuple3<Long, Integer, Double>(acc.f0, acc.f1+acc1.f1, acc.f2+acc1.f2);
 			}
  	}
+
+	public static class CongestionAreaFunction implements AllWindowFunction<Tuple3<Long, Integer, Double>, Tuple3<String, Integer, Double>, TimeWindow> {
+		@Override
+		public void apply(TimeWindow window, Iterable<Tuple3<Long, Integer, Double>> input, Collector<Tuple3<String, Integer, Double>> output) throws Exception {
+			double costAvg = 0;
+			int numberOfTrips = 0;
+			long firstElementTime = input.iterator().next().f0;
+			for (Tuple3<Long, Integer, Double> entry : input) {
+				costAvg += entry.f2;
+				numberOfTrips++;
+			}
+			if (numberOfTrips == 0) {
+				throw new NullPointerException("No taxi report in this window");
+			}
+			costAvg /= numberOfTrips;
+		
+			SimpleDateFormat formatter = new SimpleDateFormat("yyyy/MM/dd");
+			String realDateStr = formatter.format(firstElementTime);
+			
+			output.collect(new Tuple3<String, Integer, Double>(
+				realDateStr, 
+				numberOfTrips, 
+				round(costAvg, 2)
+			));
+		}
+	}
 }
