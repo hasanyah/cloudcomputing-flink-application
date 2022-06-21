@@ -100,33 +100,6 @@ public class CongestionArea {
 		return bd.doubleValue();
 	}
 
-	private static class ProcessWindow implements AggregateFunction<
-		Tuple3<Long, Integer, Double>, 
-		Tuple3<Long, Integer, Double>, 
-		Tuple3<String, Integer, Double>> {
-			@Override
-			public Tuple3<Long, Integer, Double> createAccumulator() {
-				return new Tuple3<Long, Integer, Double>(0L, 0, 0.0);
-			}
-			@Override
-			public Tuple3<Long, Integer, Double> add(
-				Tuple3<Long, Integer, Double> value, 
-				Tuple3<Long, Integer, Double> acc) {
-					return new Tuple3<Long, Integer, Double>(value.f0, value.f1+acc.f1, acc.f2+value.f2);
-			}
-			@Override
-			public Tuple3<String, Integer, Double> getResult(Tuple3<Long, Integer, Double> acc) {
-				DateFormat df = new SimpleDateFormat("yyyy/MM/dd");
-				return new Tuple3<>(df.format(acc.f0), acc.f1, round(acc.f2/acc.f1, 2));
-			}
-			@Override
-			public Tuple3<Long, Integer, Double> merge(
-				Tuple3<Long, Integer, Double> acc, 
-				Tuple3<Long, Integer, Double> acc1) {
-					return new Tuple3<Long, Integer, Double>(acc.f0, acc.f1+acc1.f1, acc.f2+acc1.f2);
-			}
- 	}
-
 	public static class CongestionAreaFunction implements AllWindowFunction<Tuple3<Long, Integer, Double>, Tuple3<String, Integer, Double>, TimeWindow> {
 		@Override
 		public void apply(TimeWindow window, Iterable<Tuple3<Long, Integer, Double>> input, Collector<Tuple3<String, Integer, Double>> output) throws Exception {
