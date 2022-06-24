@@ -39,9 +39,14 @@ import org.apache.flink.streaming.api.windowing.windows.*;
 import org.apache.flink.streaming.api.windowing.assigners.TumblingEventTimeWindows;
 import org.apache.flink.streaming.api.windowing.assigners.SlidingEventTimeWindows;
 import org.apache.flink.streaming.api.windowing.assigners.SessionWindowTimeGapExtractor;
+import org.apache.flink.streaming.api.windowing.assigners.GlobalWindows;
 import org.apache.flink.streaming.api.windowing.triggers.*;
+import org.apache.flink.streaming.api.windowing.evictors.*;
+import org.apache.flink.streaming.runtime.operators.windowing.TimestampedValue;
 import java.util.Iterator;
 import java.util.concurrent.TimeUnit;
+import org.apache.flink.streaming.api.functions.sink.PrintSinkFunction;
+import org.apache.flink.streaming.api.functions.sink.SinkFunction;
 
 public class SaturatedVendor {
     public static void main(String[] args){
@@ -50,7 +55,7 @@ public class SaturatedVendor {
 		env.setStreamTimeCharacteristic(TimeCharacteristic.EventTime);
 		DataStreamSource<String> inputStream = env.readTextFile(params.get("input"));
 
-        SingleOutputStreamOperator<Tuple4<Integer, String, String, Integer>> dailyAverages = inputStream.map(new MapFunction<String, Tuple4<Integer, Long, Long, Integer>>() {
+        SingleOutputStreamOperator<Tuple4<Integer, String, String, Integer>> saturatedVendors = inputStream.map(new MapFunction<String, Tuple4<Integer, Long, Long, Integer>>() {
 			public Tuple4<Integer, Long, Long, Integer> map(String s) throws Exception {
 				String[] data = s.split(",");
 				return new Tuple4(
@@ -65,97 +70,52 @@ public class SaturatedVendor {
 			public long extractAscendingTimestamp(Tuple4<Integer, Long, Long, Integer> element) {
 				return element.f1;
 			}
-		}).keyBy(0).window(SlidingEventTimeWindows.of(Time.of(5, TimeUnit.SECONDS), Time.of(1000, TimeUnit.MILLISECONDS)))
+		}).keyBy(0)
+		.window(GlobalWindows.create())
 		.trigger(CountTrigger.of(2))
-		.apply(new WindowFunction<Tuple4<Integer, Long, Long, Integer>, Tuple4<Integer, String, String, Integer>,Tuple, TimeWindow>() {
-			public void apply(Tuple key, TimeWindow timeWindow, Iterable<Tuple4<Integer, Long, Long ,Integer>> input, Collector<Tuple4<Integer, String, String, Integer>> out) throws Exception {
+		.evictor(new Evictor<Tuple4<Integer, Long, Long, Integer>, GlobalWindow>() {
+			@Override
+            public void evictBefore(Iterable<TimestampedValue<Tuple4<Integer, Long, Long, Integer>>> elements, int size, GlobalWindow window, EvictorContext evictorContext) {
+            }
+			
+			@Override
+            public void evictAfter(Iterable<TimestampedValue<Tuple4<Integer, Long, Long, Integer>>> elements, int size, GlobalWindow window, EvictorContext evictorContext) {
+				Iterator<TimestampedValue<Tuple4<Integer, Long, Long, Integer>>> iterator = elements.iterator();
+				if (iterator.hasNext()) 
+					iterator.next();
+					iterator.remove();
+            }
+        })
+		.apply(new WindowFunction<Tuple4<Integer, Long, Long, Integer>, Tuple4<Integer, String, String, Integer>,Tuple, GlobalWindow>() {
+			public void apply(Tuple key, GlobalWindow timeWindow, Iterable<Tuple4<Integer, Long, Long ,Integer>> input, Collector<Tuple4<Integer, String, String, Integer>> out) throws Exception {
 				Iterator<Tuple4<Integer, Long, Long, Integer>> iterator = input.iterator();
-				Tuple4<Integer, Long, Long ,Integer> first= iterator.next();
-				Tuple4<Integer, Long, Long, Integer> next = first;
-				Integer trips = first.f3;
-				while(iterator.hasNext()){
-					next = iterator.next();
-					trips+=next.f3;
-				}
-				Long diff = next.f1 -first.f2;
+				Tuple4<Integer, Long, Long ,Integer> first = iterator.next();
+				Tuple4<Integer, Long, Long, Integer> next;
+				
+				// Integer trips = first.f3;
+				// while(iterator.hasNext()){
+				// 	next = iterator.next();
+				// 	trips+=next.f3;
+				// }
+				// Long diff = next.f1 -first.f2;
 				DateFormat df = new SimpleDateFormat("yyyy-MM-dd hh:mm:ss");
-				TimeZone.setDefault(TimeZone.getTimeZone("UTC"));
-				if(diff < 10*60*1000 /* && trips ==2 */){
-					out.collect(new Tuple4(first.f0,df.format(first.f1), df.format(next.f2), trips));
+				// if(diff < 10*60*1000 /* && trips ==2 */){
+				// 	out.collect(new Tuple4(first.f0,df.format(first.f1), df.format(next.f2), trips));
+				// }
+				if (iterator.hasNext()) {
+					next = iterator.next();
+					out.collect(new Tuple4(first.f0,df.format(first.f1), df.format(next.f2), 0));
 				}
 			}
 		});
-
-
-
-		/* countWindow(2,1).apply(new WindowFunction<Tuple4<Integer, Long, Long, Integer>, Tuple4<Integer, String, String, Integer>,Tuple, GlobalWindow>() {
-			public void apply(Tuple key, GlobalWindow timeWindow, Iterable<Tuple4<Integer, Long, Long ,Integer>> input, Collector<Tuple4<Integer, String, String, Integer>> out) throws Exception {
-				Iterator<Tuple4<Integer, Long, Long, Integer>> iterator = input.iterator();
-				Tuple4<Integer, Long, Long ,Integer> first= iterator.next();
-				Tuple4<Integer, Long, Long, Integer> next = first;
-				Integer trips = first.f3;
-				while(iterator.hasNext()){
-					next = iterator.next();
-					trips+=next.f3;
-				}
-				Long diff = next.f1 -first.f2;
-				DateFormat df = new SimpleDateFormat("yyyy-MM-dd hh:mm:ss");
-				TimeZone.setDefault(TimeZone.getTimeZone("UTC"));
-				if(diff < 10*60*1000 && trips ==2){
-					out.collect(new Tuple4(first.f0,df.format(first.f1), df.format(next.f2), trips));
-				}
-			}
-		}); */
-
-		/* SingleOutputStreamOperator<Tuple4<Integer, String, String, Integer>> test2 = dailyAverages.assignTimestampsAndWatermarks(new AscendingTimestampExtractor<Tuple6<Integer, Long, Long, Integer, Long, Long>>() {
-			@Override
-			public long extractAscendingTimestamp(Tuple6<Integer, Long, Long, Integer, Long, Long> element) {
-				return element.f1;
-			}
-		}).keyBy(0).window(EventTimeSessionWindows.withDynamicGap(new SessionWindowTimeGapExtractor<Tuple6<Integer, Long, Long, Integer, Long, Long>>(){
-			@Override
-			public long extract(Tuple6<Integer, Long, Long, Integer, Long, Long> v1){
-				return v1.f5+(10*60*1000);
-			}
-		}
-		))
-		.apply(new WindowFunction<Tuple6<Integer, Long, Long, Integer, Long, Long>, Tuple4<Integer, String, String, Integer>, Tuple, TimeWindow>(){
-			public void apply(Tuple key, TimeWindow timeWindow, Iterable<Tuple6<Integer, Long, Long, Integer, Long, Long>> input, Collector<Tuple4<Integer, String, String, Integer>> out) throws Exception {
-				Iterator<Tuple6<Integer, Long, Long, Integer, Long, Long>> iterator = input.iterator();
-				Tuple6<Integer, Long, Long, Integer, Long, Long> curr = iterator.next();
-				
-				Tuple6<Integer, Long, Long, Integer, Long, Long> first = curr;
-				Tuple6<Integer, Long, Long, Integer, Long, Long> next = curr;
-				Integer trips = 2; boolean aux =false;
-				while(iterator.hasNext() &&!aux){
-					next = iterator.next();
-					if(){
-
-					}
-					else{
-
-					}
-					next = iterator.next();
-					trips++;
-				}
-				DateFormat df = new SimpleDateFormat("yyyy-MM-dd hh:mm:ss");
-				TimeZone.setDefault(TimeZone.getTimeZone("UTC"));
-				out.collect(new Tuple4(first.f0,df.format(first.f1), df.format(next.f2), trips));
-				
-			}
-		}); */
-	
-		
-		
-		//.countWindow(2,1).apply(new Testing());
-		
+		saturatedVendors.addSink(new PrintSinkFunction<>());
 
         if (params.has("output")) {
-        	dailyAverages.writeAsCsv(params.get("output"), FileSystem.WriteMode.OVERWRITE);
+        	saturatedVendors.writeAsCsv(params.get("output"), FileSystem.WriteMode.OVERWRITE);
         }
         else {
             System.out.println("Printing result to stdout. Use --output to specify output path.");
-            dailyAverages.print();
+            saturatedVendors.print();
         }
 
         try {
@@ -170,31 +130,4 @@ public class SaturatedVendor {
 		TimeZone.setDefault(TimeZone.getTimeZone("UTC"));
 		return formatter.parse(sDate).getTime();
 	}
-
-	/* public static class Testing implements WindowFunction<Tuple5<Integer, Long, Long, Integer, Long>, Tuple4<Integer, String, String, Integer>, Integer, GlobalWindow>{
-		@Override
-		public void apply(Integer key, GlobalWindow timeWindow, Iterable<Tuple5<Integer, Long, Long, Integer, Long>> input, Collector<Tuple4<Integer, String, String, Integer>> out) throws Exception {
-			Iterator<Tuple5<Integer, Long, Long, Integer, Long>> iterator = input.iterator();
-			Tuple5<Integer, Long, Long, Integer, Long> curr = iterator.next();
-			
-			Tuple5<Integer, Long, Long, Integer, Long> first = curr;
-			Tuple5<Integer, Long, Long, Integer, Long> next = curr;
-			int trips = 1; boolean aa = false;
-			while(iterator.hasNext() && !aa){
-				next = iterator.next();
-				if(((next.f1-curr.f2)*60)>=10){
-					aa = true;
-				}
-				else{
-					trips++;
-					curr = next;
-				}
-			}
-			DateFormat df = new SimpleDateFormat("yyyy-MM-dd hh:mm:ss");
-			out.collect(new Tuple4(first.f0, df.format(first.f1), df.format(curr.f2), trips));
-			
-		}
-	} */
-
-	
 }	
