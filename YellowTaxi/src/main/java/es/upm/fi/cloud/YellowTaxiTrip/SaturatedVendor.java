@@ -101,14 +101,14 @@ public class SaturatedVendor {
 				// 	next = iterator.next();
 				// 	trips+=next.f3;
 				// }
-				// Long diff = next.f1 -first.f2;
 				DateFormat df = new SimpleDateFormat("yyyy-MM-dd hh:mm:ss");
-				// if(diff < 10*60*1000 /* && trips ==2 */){
-				// 	out.collect(new Tuple4(first.f0,df.format(first.f1), df.format(next.f2), trips));
-				// }
 				if (iterator.hasNext()) {
 					next = iterator.next();
-					out.collect(new Tuple4(first.f0,df.format(first.f1), df.format(next.f2), 0));
+					long diff = next.f1 -first.f2;
+					if(diff < 10*60*1000 /* && trips ==2 */){
+						out.collect(new Tuple4(first.f0,df.format(System.currentTimeMillis()), df.format(next.f2), 2));
+					}
+					// out.collect(new Tuple4(first.f0,df.format(first.f1), df.format(next.f2), 0));
 				}
 			}
 		});
