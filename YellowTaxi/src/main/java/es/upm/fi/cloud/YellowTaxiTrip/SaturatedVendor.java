@@ -1,55 +1,34 @@
 package es.upm.fi.cloud.YellowTaxiTrip;
 
-import java.util.Date;
 import java.util.TimeZone;
 import java.text.DateFormat;
 import java.text.SimpleDateFormat;
-import java.sql.Timestamp;
-import java.text.*;
-import java.math.BigDecimal;
-import java.math.RoundingMode;
-import org.apache.commons.lang3.math.NumberUtils;
-import org.apache.commons.lang3.time.DateUtils;
-import org.apache.flink.api.common.functions.AggregateFunction;
-import org.apache.flink.api.common.functions.FilterFunction;
-import org.apache.flink.api.common.functions.FlatMapFunction;
+import java.text.ParseException;
+import java.util.Iterator;
+import org.apache.flink.core.fs.FileSystem;
 import org.apache.flink.api.common.functions.MapFunction;
 import org.apache.flink.api.common.functions.ReduceFunction;
 import org.apache.flink.api.java.utils.ParameterTool;
 import org.apache.flink.api.java.tuple.Tuple;
-import org.apache.flink.api.java.tuple.Tuple2;
-import org.apache.flink.api.java.tuple.Tuple3;
 import org.apache.flink.api.java.tuple.Tuple4;
-import org.apache.flink.api.java.tuple.Tuple5;
-import org.apache.flink.api.java.tuple.Tuple6;
-import org.apache.flink.api.java.tuple.Tuple19;
-import org.apache.flink.core.fs.FileSystem;
-import org.apache.flink.streaming.api.datastream.DataStreamSource;
-import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
-import org.apache.flink.streaming.api.datastream.KeyedStream;
-import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
-import org.apache.flink.streaming.api.functions.timestamps.AscendingTimestampExtractor;
-import org.apache.flink.streaming.api.TimeCharacteristic;
-import org.apache.flink.streaming.api.windowing.time.Time;
-import org.apache.flink.streaming.api.windowing.windows.TimeWindow;
-import org.apache.flink.util.Collector;
-import org.apache.flink.streaming.api.functions.windowing.WindowFunction;
-import org.apache.flink.streaming.api.windowing.windows.GlobalWindow;
-import org.apache.flink.streaming.api.windowing.windows.*;
-import org.apache.flink.streaming.api.windowing.assigners.TumblingEventTimeWindows;
-import org.apache.flink.streaming.api.windowing.assigners.SlidingEventTimeWindows;
-import org.apache.flink.streaming.api.windowing.assigners.SessionWindowTimeGapExtractor;
-import org.apache.flink.streaming.api.windowing.assigners.GlobalWindows;
-import org.apache.flink.streaming.api.windowing.triggers.*;
-import org.apache.flink.streaming.api.windowing.evictors.*;
-import org.apache.flink.streaming.runtime.operators.windowing.TimestampedValue;
-import java.util.Iterator;
-import java.util.concurrent.TimeUnit;
-import org.apache.flink.streaming.api.functions.sink.PrintSinkFunction;
-import org.apache.flink.streaming.api.functions.sink.SinkFunction;
 import org.apache.flink.api.common.state.ReducingState;
 import org.apache.flink.api.common.state.ReducingStateDescriptor;
 import org.apache.flink.api.common.typeutils.base.LongSerializer;
+import org.apache.flink.streaming.api.datastream.DataStreamSource;
+import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
+import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
+import org.apache.flink.streaming.api.functions.timestamps.AscendingTimestampExtractor;
+import org.apache.flink.streaming.api.functions.windowing.WindowFunction;
+import org.apache.flink.streaming.api.functions.sink.PrintSinkFunction;
+import org.apache.flink.streaming.api.windowing.time.Time;
+import org.apache.flink.streaming.api.windowing.windows.GlobalWindow;
+import org.apache.flink.streaming.api.windowing.windows.Window;
+import org.apache.flink.streaming.api.windowing.assigners.GlobalWindows;
+import org.apache.flink.streaming.api.windowing.triggers.*;
+import org.apache.flink.streaming.api.windowing.evictors.*;
+import org.apache.flink.streaming.api.TimeCharacteristic;
+import org.apache.flink.streaming.runtime.operators.windowing.TimestampedValue;
+import org.apache.flink.util.Collector;
 
 public class SaturatedVendor {
     public static void main(String[] args){
@@ -90,32 +69,30 @@ public class SaturatedVendor {
 				}
             }
         })
-		.apply(new WindowFunction<Tuple4<Integer, Long, Long, Integer>, Tuple4<Integer, String, String, Integer>,Tuple, GlobalWindow>() {
-			public void apply(Tuple key, GlobalWindow timeWindow, Iterable<Tuple4<Integer, Long, Long ,Integer>> input, Collector<Tuple4<Integer, String, String, Integer>> out) throws Exception {
-				Iterator<Tuple4<Integer, Long, Long, Integer>> iterator = input.iterator();
-				Tuple4<Integer, Long, Long ,Integer> first = iterator.next();
-				Tuple4<Integer, Long, Long, Integer> next;
-				
-				// Integer trips = first.f3;
-				// while(iterator.hasNext()){
-				// 	next = iterator.next();
-				// 	trips+=next.f3;
-				// }
-				DateFormat df = new SimpleDateFormat("yyyy-MM-dd hh:mm:ss");
-				if (iterator.hasNext()) {
-					next = iterator.next();
-					long diff = next.f1 -first.f2;
-					if(diff < 10*60*1000 /* && trips ==2 */){
-						out.collect(new Tuple4(first.f0,df.format(System.currentTimeMillis()), df.format(next.f2), 2));
+		.apply(new WindowFunction<
+			Tuple4<Integer, Long, Long, Integer>, 
+			Tuple4<Integer, String, String, Integer>,
+			Tuple, 
+			GlobalWindow>() {
+				public void apply(Tuple key, GlobalWindow timeWindow, Iterable<Tuple4<Integer, Long, Long ,Integer>> input, Collector<Tuple4<Integer, String, String, Integer>> out) throws Exception {
+					Iterator<Tuple4<Integer, Long, Long, Integer>> iterator = input.iterator();
+					Tuple4<Integer, Long, Long ,Integer> first = iterator.next();
+					Tuple4<Integer, Long, Long, Integer> next;
+
+					DateFormat df = new SimpleDateFormat("yyyy-MM-dd hh:mm:ss");
+					if (iterator.hasNext()) {
+						next = iterator.next();
+						long diff = next.f1 -first.f2;
+						if(diff < 10*60*1000 /* && trips ==2 */){
+							out.collect(new Tuple4(first.f0,df.format(System.currentTimeMillis()), df.format(next.f2), 2));
+						}
 					}
-					// out.collect(new Tuple4(first.f0,df.format(first.f1), df.format(next.f2), 0));
 				}
-			}
 		});
 		saturatedVendors.addSink(new PrintSinkFunction<>());
 
         if (params.has("output")) {
-        	saturatedVendors.writeAsCsv(params.get("output"), FileSystem.WriteMode.OVERWRITE);
+        	saturatedVendors.writeAsCsv(params.get("output"), FileSystem.WriteMode.OVERWRITE).setParallelism(1);
         }
         else {
             System.out.println("Printing result to stdout. Use --output to specify output path.");
