@@ -1,34 +1,27 @@
 package es.upm.fi.cloud.YellowTaxiTrip;
 
-import java.util.Date;
 import java.util.TimeZone;
 import java.text.DateFormat;
 import java.text.SimpleDateFormat;
-import java.sql.Timestamp;
-import java.text.*;
+import java.text.ParseException;
 import java.math.BigDecimal;
 import java.math.RoundingMode;
 import org.apache.commons.lang3.math.NumberUtils;
-import org.apache.commons.lang3.time.DateUtils;
+import org.apache.flink.core.fs.FileSystem;
 import org.apache.flink.api.common.functions.AggregateFunction;
 import org.apache.flink.api.common.functions.FilterFunction;
-import org.apache.flink.api.common.functions.FlatMapFunction;
 import org.apache.flink.api.common.functions.MapFunction;
-import org.apache.flink.api.common.functions.ReduceFunction;
 import org.apache.flink.api.java.utils.ParameterTool;
-import org.apache.flink.api.java.tuple.Tuple2;
 import org.apache.flink.api.java.tuple.Tuple3;
 import org.apache.flink.api.java.tuple.Tuple4;
-import org.apache.flink.api.java.tuple.Tuple19;
-import org.apache.flink.core.fs.FileSystem;
 import org.apache.flink.streaming.api.datastream.DataStreamSource;
 import org.apache.flink.streaming.api.datastream.SingleOutputStreamOperator;
 import org.apache.flink.streaming.api.environment.StreamExecutionEnvironment;
 import org.apache.flink.streaming.api.functions.timestamps.AscendingTimestampExtractor;
 import org.apache.flink.streaming.api.TimeCharacteristic;
+import org.apache.flink.streaming.api.windowing.assigners.TumblingEventTimeWindows;
 import org.apache.flink.streaming.api.windowing.time.Time;
 import org.apache.flink.util.Collector;
-import org.apache.flink.streaming.api.windowing.assigners.TumblingEventTimeWindows;
 
 public class CongestionArea {
 	public static void main(String[] args) {
@@ -68,7 +61,7 @@ public class CongestionArea {
 		).aggregate(new ProcessWindow());
 
 		if (params.has("output")) {
-            dailyAverages.writeAsCsv(params.get("output"), FileSystem.WriteMode.OVERWRITE);
+            dailyAverages.writeAsCsv(params.get("output"), FileSystem.WriteMode.OVERWRITE).setParallelism(1);
         }
         else {
             System.out.println("Printing result to stdout. Use --output to specify output path.");
