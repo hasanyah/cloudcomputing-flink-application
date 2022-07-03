@@ -84,7 +84,7 @@ public class SaturatedVendor {
 						next = iterator.next();
 						long diff = next.f1 -first.f2;
 						if(diff < 10*60*1000 /* && trips ==2 */){
-							out.collect(new Tuple4(first.f0,df.format(System.currentTimeMillis()), df.format(next.f2), 2));
+							out.collect(new Tuple4(first.f0,df.format(first.f1), df.format(next.f2), 2));
 						}
 					}
 				}
